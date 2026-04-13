@@ -4,7 +4,7 @@
 
 "생로랑 맛 자라" — 디자인은 비슷하되 가격은 1/10. 럭셔리 브랜드 상품 URL을 입력하면, AI가 SPA/저가 브랜드에서 시각적으로 유사한 아이템을 추천합니다.
 
-🔗 **라이브 데모**: [taste-like.vercel.app](https://taste-like.vercel.app)
+🔗 [taste-like.vercel.app](https://taste-like.vercel.app)
 
 <!-- 스크린샷 -->
 
@@ -82,54 +82,6 @@ scripts/
 ├── crawl.ts            # 통합 크롤 CLI
 ├── batch-embed.ts      # 배치 임베딩
 └── batch-describe.ts   # 배치 상품 설명 생성
-```
-
----
-
-## Getting Started
-
-### 사전 요구사항
-
-- Node.js 20+
-- npm
-- Supabase 프로젝트 (pgvector 확장 활성화)
-- HuggingFace Space (임베딩용)
-
-### 설치
-
-```bash
-git clone https://github.com/ashbyash/taste-like.git
-cd taste-like
-npm install
-```
-
-### 환경 변수
-
-`.env.local.example`을 복사하고 값을 채워주세요:
-
-```bash
-cp .env.local.example .env.local
-```
-
-주요 환경 변수:
-
-| 변수 | 설명 |
-|------|------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase 프로젝트 URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
-| `HF_SPACE_URL` | HuggingFace Space 임베딩 서버 URL |
-| `OPENAI_API_KEY` | 상품 설명 생성용 (batch-describe) |
-
-### 개발 서버
-
-```bash
-npm run dev
-```
-
-### 테스트
-
-```bash
-npm test
 ```
 
 ---

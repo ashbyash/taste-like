@@ -1,0 +1,161 @@
+name: On-Demand Crawl
+
+on:
+  workflow_dispatch:
+    inputs:
+      brand:
+        description: 'Brand slug (zara, cos, arket, uniqlo, miu-miu, lemaire, massimo-dutti, saint-laurent, the-row, all)'
+        required: true
+        type: string
+
+env:
+  NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  HEADLESS: 'false'
+
+jobs:
+  crawl:
+    name: Crawl
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      BRAND: ${{ inputs.brand }}
+      MIUMIU_ALGOLIA_APP_ID: ${{ secrets.MIUMIU_ALGOLIA_APP_ID }}
+      MIUMIU_ALGOLIA_API_KEY: ${{ secrets.MIUMIU_ALGOLIA_API_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+
+      # Validate brand input
+      - name: Validate brand
+        run: |
+          VALID="zara cos arket uniqlo miu-miu lemaire massimo-dutti saint-laurent the-row all"
+          if ! echo "$VALID" | grep -qw "$BRAND"; then
+            echo "Invalid brand: $BRAND"
+            exit 1
+          fi
+
+      # Playwright install (only for brands that need it)
+      - name: Install Playwright Chromium
+        if: contains('zara cos arket uniqlo all', inputs.brand)
+        run: npx playwright install chromium --with-deps
+
+      # API-based crawlers (single brand — no continue-on-error)
+      - name: Crawl (API)
+        if: contains('miu-miu lemaire massimo-dutti the-row saint-laurent', inputs.brand)
+        run: node --import tsx scripts/crawl.ts "$BRAND" --both-genders
+
+      # Playwright-based crawlers (single brand — no continue-on-error)
+      - name: Crawl (Playwright)
+        if: contains('zara cos arket uniqlo', inputs.brand)
+        run: xvfb-run node --import tsx scripts/crawl.ts "$BRAND" --both-genders
+
+      # All brands — individual failures don't block others
+      - name: Crawl all API brands
+        id: crawl_all_api
+        if: inputs.brand == 'all'
+        run: |
+          FAILED=""
+          node --import tsx scripts/crawl.ts miu-miu || FAILED="$FAILED miu-miu"
+          node --import tsx scripts/crawl.ts lemaire --both-genders || FAILED="$FAILED lemaire"
+          node --import tsx scripts/crawl.ts massimo-dutti --both-genders || FAILED="$FAILED massimo-dutti"
+          node --import tsx scripts/crawl.ts saint-laurent --both-genders || FAILED="$FAILED saint-laurent"
+          node --import tsx scripts/crawl.ts the-row --both-genders || FAILED="$FAILED the-row"
+          if [ -n "$FAILED" ]; then
+            echo "::warning::Failed brands:$FAILED"
+          fi
+
+      - name: Crawl all Playwright brands
+        id: crawl_all_pw
+        if: inputs.brand == 'all'
+        run: |
+          FAILED=""
+          xvfb-run node --import tsx scripts/crawl.ts zara --both-genders || FAILED="$FAILED zara"
+          xvfb-run node --import tsx scripts/crawl.ts cos --both-genders || FAILED="$FAILED cos"
+          xvfb-run node --import tsx scripts/crawl.ts arket --both-genders || FAILED="$FAILED arket"
+          xvfb-run node --import tsx scripts/crawl.ts uniqlo --both-genders || FAILED="$FAILED uniqlo"
+          if [ -n "$FAILED" ]; then
+            echo "::warning::Failed brands:$FAILED"
+          fi
+
+  batch-describe:
+    name: Generate Fashion Descriptions
+    needs: [crawl]
+    if: ${{ !cancelled() && needs.crawl.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DESCRIBE_TIMEOUT_MS: '15000'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Generate descriptions for new products
+        run: node --import tsx scripts/batch-describe.ts
+
+  batch-embed:
+    name: Generate Embeddings + Invalidate Cache
+    needs: [batch-describe]
+    if: ${{ !cancelled() && needs.batch-describe.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HF_SPACE_URL: ${{ secrets.HF_SPACE_URL }}
+      HF_SPACE_API_KEY: ${{ secrets.HF_SPACE_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Generate embeddings for new products
+        run: node --import tsx scripts/batch-embed.ts
+
+  notify:
+    name: Telegram Notification
+    needs: [crawl, batch-describe, batch-embed]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BRAND: ${{ inputs.brand }}
+      CRAWL_STATUS: ${{ needs.crawl.result }}
+      DESCRIBE_STATUS: ${{ needs.batch-describe.result }}
+      EMBED_STATUS: ${{ needs.batch-embed.result }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Send result to Telegram
+        run: |
+          if [ "$CRAWL_STATUS" = "success" ] && [ "$DESCRIBE_STATUS" = "success" ] && [ "$EMBED_STATUS" = "success" ]; then
+            EMOJI="✅"
+            STATUS="완료"
+          elif [ "$CRAWL_STATUS" = "failure" ]; then
+            EMOJI="❌"
+            STATUS="크롤 실패"
+          else
+            EMOJI="⚠️"
+            STATUS="일부 실패"
+          fi
+
+          MSG="${EMOJI} *On-Demand Crawl ${STATUS}*
+
+          *Brand:* ${BRAND}
+          *Crawl:* ${CRAWL_STATUS}
+          *Describe:* ${DESCRIBE_STATUS}
+          *Embed:* ${EMBED_STATUS}"
+
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$MSG" '{chat_id: $chat_id, text: $text, parse_mode: "Markdown"}')"

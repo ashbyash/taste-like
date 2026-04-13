@@ -1,0 +1,51 @@
+name: On-Demand Cleanup
+
+on:
+  workflow_dispatch:
+
+env:
+  NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+jobs:
+  cleanup:
+    name: Cleanup Unavailable Products
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Run cleanup
+        run: node --import tsx scripts/cleanup.ts
+
+  notify:
+    name: Telegram Notification
+    needs: [cleanup]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CLEANUP_STATUS: ${{ needs.cleanup.result }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Send result to Telegram
+        run: |
+          if [ "$CLEANUP_STATUS" = "success" ]; then
+            EMOJI="✅"
+            STATUS="완료"
+          else
+            EMOJI="❌"
+            STATUS="실패"
+          fi
+
+          MSG="${EMOJI} *Cleanup ${STATUS}*"
+
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$MSG" '{chat_id: $chat_id, text: $text, parse_mode: "Markdown"}')"

@@ -1,0 +1,76 @@
+name: On-Demand Embed
+
+on:
+  workflow_dispatch:
+    inputs:
+      brand:
+        description: 'Brand name (ZARA, COS, ARKET, UNIQLO, etc.) or "all" for all brands'
+        required: false
+        default: 'all'
+        type: string
+
+env:
+  NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  HF_SPACE_URL: ${{ secrets.HF_SPACE_URL }}
+  HF_SPACE_API_KEY: ${{ secrets.HF_SPACE_API_KEY }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+jobs:
+  embed:
+    name: Generate Embeddings
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BRAND: ${{ inputs.brand }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Batch embed
+        run: |
+          if [ "$BRAND" = "all" ]; then
+            node --import tsx scripts/batch-embed.ts
+          else
+            node --import tsx scripts/batch-embed.ts --brand "$BRAND"
+          fi
+
+  notify:
+    name: Telegram Notification
+    needs: [embed]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BRAND: ${{ inputs.brand }}
+      EMBED_STATUS: ${{ needs.embed.result }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Send result to Telegram
+        run: |
+          if [ "$EMBED_STATUS" = "success" ]; then
+            EMOJI="✅"
+            STATUS="완료"
+          else
+            EMOJI="❌"
+            STATUS="실패"
+          fi
+
+          LABEL="$BRAND"
+          if [ "$BRAND" = "all" ]; then
+            LABEL="전체"
+          fi
+
+          MSG="${EMOJI} *On-Demand Embed ${STATUS}*
+
+          *Brand:* ${LABEL}
+          *Status:* ${EMBED_STATUS}"
+
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$MSG" '{chat_id: $chat_id, text: $text, parse_mode: "Markdown"}')"

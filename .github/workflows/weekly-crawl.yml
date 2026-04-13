@@ -1,0 +1,142 @@
+name: Weekly Crawl + Describe + Embed
+
+on:
+  schedule:
+    # Monday 6AM KST = Sunday 21:00 UTC
+    - cron: '0 21 * * 0'
+  workflow_dispatch: # Manual trigger
+
+env:
+  NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  # Headful mode required — Akamai Bot Manager blocks headless Chromium
+  # xvfb provides a virtual display for headful browsers in CI
+  HEADLESS: 'false'
+
+jobs:
+  api-crawlers:
+    name: API Crawlers (Miu Miu, Lemaire, Massimo Dutti, The Row)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MIUMIU_ALGOLIA_APP_ID: ${{ secrets.MIUMIU_ALGOLIA_APP_ID }}
+      MIUMIU_ALGOLIA_API_KEY: ${{ secrets.MIUMIU_ALGOLIA_API_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Crawl Miu Miu
+        id: miumiu
+        continue-on-error: true
+        run: node --import tsx scripts/crawl.ts miu-miu
+
+      - name: Crawl Lemaire
+        id: lemaire
+        continue-on-error: true
+        run: node --import tsx scripts/crawl.ts lemaire --both-genders
+
+      - name: Crawl Massimo Dutti
+        id: massimo
+        continue-on-error: true
+        run: node --import tsx scripts/crawl.ts massimo-dutti --both-genders
+
+      - name: Crawl The Row
+        id: therow
+        continue-on-error: true
+        run: node --import tsx scripts/crawl.ts the-row --both-genders
+
+  playwright-crawlers:
+    name: Playwright Crawlers (ZARA, COS, ARKET, UNIQLO)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Crawl ZARA
+        id: zara
+        continue-on-error: true
+        run: xvfb-run node --import tsx scripts/crawl.ts zara --both-genders
+
+      - name: Crawl COS
+        id: cos
+        continue-on-error: true
+        run: xvfb-run node --import tsx scripts/crawl.ts cos --both-genders
+
+      - name: Crawl ARKET
+        id: arket
+        continue-on-error: true
+        run: xvfb-run node --import tsx scripts/crawl.ts arket --both-genders
+
+      - name: Crawl UNIQLO
+        id: uniqlo
+        continue-on-error: true
+        run: xvfb-run node --import tsx scripts/crawl.ts uniqlo --both-genders
+
+  ysl-crawler:
+    name: YSL Crawler (Saint Laurent)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Crawl Saint Laurent
+        continue-on-error: true
+        run: node --import tsx scripts/crawl.ts saint-laurent --both-genders
+
+  batch-describe:
+    name: Generate Fashion Descriptions
+    needs: [api-crawlers, playwright-crawlers, ysl-crawler]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DESCRIBE_TIMEOUT_MS: '15000'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Generate descriptions for new products
+        run: node --import tsx scripts/batch-describe.ts
+
+  batch-embed:
+    name: Generate Embeddings + Invalidate Cache
+    needs: [batch-describe]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HF_SPACE_URL: ${{ secrets.HF_SPACE_URL }}
+      HF_SPACE_API_KEY: ${{ secrets.HF_SPACE_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Generate embeddings for new products
+        run: node --import tsx scripts/batch-embed.ts

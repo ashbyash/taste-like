@@ -16,6 +16,7 @@ env:
   HF_SPACE_URL: ${{ secrets.HF_SPACE_URL }}
   HF_SPACE_API_KEY: ${{ secrets.HF_SPACE_API_KEY }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  HF_SPACE_REPO_ID: ${{ secrets.HF_SPACE_REPO_ID }}
 
 jobs:
   embed:

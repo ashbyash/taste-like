@@ -12,6 +12,7 @@
 // Set longer timeout for batch processing (before importing fashion module)
 process.env.DESCRIBE_TIMEOUT_MS = '15000';
 
+import { appendFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 import { describeFashionItem } from '../src/lib/describe/fashion';
 
@@ -43,6 +44,13 @@ function parseArgs() {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function writeGithubOutput(pairs: Record<string, string | number>) {
+  const file = process.env.GITHUB_OUTPUT;
+  if (!file) return;
+  const body = Object.entries(pairs).map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
+  appendFileSync(file, body);
 }
 
 async function fetchProducts(brand?: string): Promise<ProductRow[]> {
@@ -158,10 +166,12 @@ async function main() {
   console.log(`Concurrency: ${CONCURRENCY}, Timeout: 15s, Retries: ${MAX_RETRIES}`);
 
   const products = await fetchProducts(brand);
-  console.log(`Found ${products.length} products without fashion_description`);
+  const total = products.length;
+  console.log(`Found ${total} products without fashion_description`);
 
-  if (products.length === 0) {
+  if (total === 0) {
     console.log('Nothing to do.');
+    writeGithubOutput({ total: 0, success: 0, failed: 0 });
     return;
   }
 
@@ -205,9 +215,21 @@ async function main() {
   console.log('\n=== Complete ===');
   console.log(`Total: ${totalSuccess} success, ${totalFailed} failed`);
   console.log(`Time: ${totalTime}s`);
+
+  writeGithubOutput({
+    total,
+    success: totalSuccess,
+    failed: totalFailed,
+  });
+
+  if (total > 0 && totalSuccess === 0) {
+    console.error(`All ${total} description calls failed.`);
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {
   console.error('Fatal:', err);
+  writeGithubOutput({ total: -1, success: 0, failed: 0 });
   process.exit(1);
 });

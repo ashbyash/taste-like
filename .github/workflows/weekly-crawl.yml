@@ -118,7 +118,12 @@ jobs:
       - run: npm ci
 
       - name: Generate descriptions for new products
+        id: describe_step
         run: node --import tsx scripts/batch-describe.ts
+    outputs:
+      total: ${{ steps.describe_step.outputs.total }}
+      success: ${{ steps.describe_step.outputs.success }}
+      failed: ${{ steps.describe_step.outputs.failed }}
 
   batch-embed:
     name: Generate Embeddings + Invalidate Cache
@@ -130,6 +135,7 @@ jobs:
       HF_SPACE_URL: ${{ secrets.HF_SPACE_URL }}
       HF_SPACE_API_KEY: ${{ secrets.HF_SPACE_API_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_SPACE_REPO_ID: ${{ secrets.HF_SPACE_REPO_ID }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -139,4 +145,80 @@ jobs:
       - run: npm ci
 
       - name: Generate embeddings for new products
+        id: embed_step
         run: node --import tsx scripts/batch-embed.ts
+    outputs:
+      total: ${{ steps.embed_step.outputs.total }}
+      success: ${{ steps.embed_step.outputs.success }}
+      failed: ${{ steps.embed_step.outputs.failed }}
+      cache_invalidated: ${{ steps.embed_step.outputs.cache_invalidated }}
+
+  notify:
+    name: Telegram Notification
+    needs: [api-crawlers, playwright-crawlers, ysl-crawler, batch-describe, batch-embed]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_RESULT: ${{ needs.api-crawlers.result }}
+      PLAYWRIGHT_RESULT: ${{ needs.playwright-crawlers.result }}
+      YSL_RESULT: ${{ needs.ysl-crawler.result }}
+      DESCRIBE_RESULT: ${{ needs.batch-describe.result }}
+      DESCRIBE_TOTAL: ${{ needs.batch-describe.outputs.total }}
+      DESCRIBE_SUCCESS: ${{ needs.batch-describe.outputs.success }}
+      DESCRIBE_FAILED: ${{ needs.batch-describe.outputs.failed }}
+      EMBED_RESULT: ${{ needs.batch-embed.result }}
+      EMBED_TOTAL: ${{ needs.batch-embed.outputs.total }}
+      EMBED_SUCCESS: ${{ needs.batch-embed.outputs.success }}
+      EMBED_FAILED: ${{ needs.batch-embed.outputs.failed }}
+      CACHE_INVALIDATED: ${{ needs.batch-embed.outputs.cache_invalidated }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Send weekly summary to Telegram
+        run: |
+          icon() {
+            case "$1" in
+              success) echo "✅" ;;
+              failure) echo "❌" ;;
+              cancelled) echo "⚪" ;;
+              skipped) echo "⏭" ;;
+              *) echo "❓" ;;
+            esac
+          }
+
+          API_ICON=$(icon "$API_RESULT")
+          PW_ICON=$(icon "$PLAYWRIGHT_RESULT")
+          YSL_ICON=$(icon "$YSL_RESULT")
+          DESC_ICON=$(icon "$DESCRIBE_RESULT")
+          EMB_ICON=$(icon "$EMBED_RESULT")
+
+          if [ "$API_RESULT" = "success" ] && [ "$PLAYWRIGHT_RESULT" = "success" ] \
+             && [ "$YSL_RESULT" = "success" ] && [ "$DESCRIBE_RESULT" = "success" ] \
+             && [ "$EMBED_RESULT" = "success" ]; then
+            HEADER="✅ *Weekly Crawl 완료*"
+          else
+            HEADER="⚠️ *Weekly Crawl 부분 실패*"
+          fi
+
+          DESC_T="${DESCRIBE_TOTAL:-?}"
+          DESC_S="${DESCRIBE_SUCCESS:-?}"
+          DESC_F="${DESCRIBE_FAILED:-?}"
+          EMB_T="${EMBED_TOTAL:-?}"
+          EMB_S="${EMBED_SUCCESS:-?}"
+          EMB_F="${EMBED_FAILED:-?}"
+          CACHE="${CACHE_INVALIDATED:-unknown}"
+
+          MSG="${HEADER}
+
+          ${API_ICON} API crawlers (miumiu/lemaire/massimo/therow)
+          ${PW_ICON} Playwright crawlers (zara/cos/arket/uniqlo)
+          ${YSL_ICON} YSL crawler
+
+          ${DESC_ICON} Describe: ${DESC_T} requested, ${DESC_S} ok, ${DESC_F} failed
+          ${EMB_ICON} Embed: ${EMB_T} requested, ${EMB_S} ok, ${EMB_F} failed
+          Cache invalidated: ${CACHE}"
+
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$MSG" '{chat_id: $chat_id, text: $text, parse_mode: "Markdown"}')"

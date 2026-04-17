@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { sendTelegramMessage } from '@/lib/telegram';
+import { sendTelegramMessage, type ReplyKeyboardMarkup } from '@/lib/telegram';
 import { runHealthChecks, formatReport } from '@/lib/health/checks';
 import { supabaseAdmin } from '@/lib/supabase/server';
+
+const DEFAULT_KEYBOARD: ReplyKeyboardMarkup = {
+  keyboard: [
+    ['/status', '/health'],
+    ['/embed', '/cleanup'],
+    ['/crawl', '/help'],
+  ],
+  resize_keyboard: true,
+  is_persistent: true,
+};
 
 interface TelegramUpdate {
   update_id: number;
@@ -93,7 +103,12 @@ export async function POST(request: NextRequest) {
 
   const token = process.env.TELEGRAM_BOT_TOKEN!;
   const reply = (msg: string) =>
-    sendTelegramMessage({ token, chatId: String(chatId), text: msg });
+    sendTelegramMessage({
+      token,
+      chatId: String(chatId),
+      text: msg,
+      replyMarkup: DEFAULT_KEYBOARD,
+    });
 
   try {
     const [command, ...args] = text.split(/\s+/);

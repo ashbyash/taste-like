@@ -84,17 +84,22 @@ async function embedWithRetry(
   text: string | undefined,
   retries = MAX_RETRIES,
 ): Promise<number[]> {
+  let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       return await getEmbedding(imageUrl, text);
     } catch (err) {
-      if (attempt === retries) throw err;
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (attempt === retries) {
+        throw new Error(`${msg} (image_url=${imageUrl})`);
+      }
       const delay = 1000 * (attempt + 1);
-      console.warn(`  Retry ${attempt + 1}/${retries} after ${delay}ms...`);
+      console.warn(`  Retry ${attempt + 1}/${retries} after ${delay}ms — ${msg}`);
       await sleep(delay);
     }
   }
-  throw new Error('Unreachable');
+  throw lastErr ?? new Error('Unreachable');
 }
 
 async function processProduct(
@@ -155,6 +160,8 @@ async function main() {
 
   let success = 0;
   let failed = 0;
+  const errorSamples: string[] = [];
+  const MAX_ERROR_SAMPLES = 5;
 
   for (let i = 0; i < products.length; i += BATCH_SIZE) {
     const batch = products.slice(i, i + BATCH_SIZE);
@@ -167,8 +174,15 @@ async function main() {
       );
 
       for (const r of results) {
-        if (r.status === 'fulfilled' && r.value) success++;
-        else failed++;
+        if (r.status === 'fulfilled' && r.value) {
+          success++;
+        } else {
+          failed++;
+          if (r.status === 'rejected' && errorSamples.length < MAX_ERROR_SAMPLES) {
+            const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
+            errorSamples.push(reason);
+          }
+        }
       }
 
       if (!dryRun && j + CONCURRENCY < batch.length) {
@@ -177,6 +191,13 @@ async function main() {
     }
 
     console.log(`  Progress: ${Math.min(i + BATCH_SIZE, total)}/${total} (${success} ok, ${failed} failed)`);
+  }
+
+  if (errorSamples.length > 0) {
+    console.error(`\nError samples (first ${errorSamples.length}):`);
+    for (const e of errorSamples) {
+      console.error(`  - ${e}`);
+    }
   }
 
   console.log(`\nDone. ${success} embedded, ${failed} failed.`);

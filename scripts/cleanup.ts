@@ -9,6 +9,7 @@
  *   node --env-file=.env.local --import tsx scripts/cleanup.ts --dry-run
  */
 
+import { appendFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
@@ -27,9 +28,21 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function writeGithubOutput(pairs: Record<string, string | number>) {
+  const file = process.env.GITHUB_OUTPUT;
+  if (!file) return;
+  const body = Object.entries(pairs).map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
+  appendFileSync(file, body);
+}
+
+interface PhaseResult {
+  count: number;
+  hadError: boolean;
+}
+
 // --- Phase 1: Check images for products missing embeddings ---
 
-async function checkAndMarkBrokenImages(dryRun: boolean): Promise<number> {
+async function checkAndMarkBrokenImages(dryRun: boolean): Promise<PhaseResult> {
   const { data: products, error } = await supabase
     .from('products')
     .select('id, brand, name, image_url')
@@ -39,7 +52,7 @@ async function checkAndMarkBrokenImages(dryRun: boolean): Promise<number> {
   if (error) throw new Error(`Fetch failed: ${error.message}`);
   if (!products || products.length === 0) {
     console.log('Phase 1: No products with missing embeddings.');
-    return 0;
+    return { count: 0, hadError: false };
   }
 
   console.log(`Phase 1: Checking ${products.length} products with missing embeddings...`);
@@ -72,7 +85,7 @@ async function checkAndMarkBrokenImages(dryRun: boolean): Promise<number> {
 
   if (broken.length === 0) {
     console.log('Phase 1: All images OK.');
-    return 0;
+    return { count: 0, hadError: false };
   }
 
   console.log(`Phase 1: ${broken.length} broken images found:`);
@@ -80,26 +93,28 @@ async function checkAndMarkBrokenImages(dryRun: boolean): Promise<number> {
     console.log(`  ${p.brand} | ${p.name}`);
   }
 
-  if (!dryRun) {
-    const ids = broken.map((p) => p.id);
-    const { error: updateErr } = await supabase
-      .from('products')
-      .update({ is_available: false })
-      .in('id', ids);
-
-    if (updateErr) {
-      console.error(`Failed to mark unavailable: ${updateErr.message}`);
-    } else {
-      console.log(`Phase 1: Marked ${broken.length} products as unavailable.`);
-    }
+  if (dryRun) {
+    return { count: broken.length, hadError: false };
   }
 
-  return broken.length;
+  const ids = broken.map((p) => p.id);
+  const { error: updateErr } = await supabase
+    .from('products')
+    .update({ is_available: false })
+    .in('id', ids);
+
+  if (updateErr) {
+    console.error(`Failed to mark unavailable: ${updateErr.message}`);
+    return { count: 0, hadError: true };
+  }
+
+  console.log(`Phase 1: Marked ${broken.length} products as unavailable.`);
+  return { count: broken.length, hadError: false };
 }
 
 // --- Phase 2: Delete unavailable products ---
 
-async function deleteUnavailable(dryRun: boolean): Promise<number> {
+async function deleteUnavailable(dryRun: boolean): Promise<PhaseResult> {
   const { count, error: countErr } = await supabase
     .from('products')
     .select('*', { count: 'exact', head: true })
@@ -110,34 +125,35 @@ async function deleteUnavailable(dryRun: boolean): Promise<number> {
   const total = count ?? 0;
   if (total === 0) {
     console.log('Phase 2: No unavailable products to delete.');
-    return 0;
+    return { count: 0, hadError: false };
   }
 
   console.log(`Phase 2: ${total} unavailable products to delete.`);
 
-  if (!dryRun) {
-    const { error: delErr } = await supabase
-      .from('products')
-      .delete()
-      .eq('is_available', false);
-
-    if (delErr) {
-      console.error(`Delete failed: ${delErr.message}`);
-      return 0;
-    }
-
-    console.log(`Phase 2: Deleted ${total} products.`);
+  if (dryRun) {
+    return { count: total, hadError: false };
   }
 
-  return total;
+  const { error: delErr } = await supabase
+    .from('products')
+    .delete()
+    .eq('is_available', false);
+
+  if (delErr) {
+    console.error(`Delete failed: ${delErr.message}`);
+    return { count: 0, hadError: true };
+  }
+
+  console.log(`Phase 2: Deleted ${total} products.`);
+  return { count: total, hadError: false };
 }
 
 // --- Phase 3: Invalidate cache ---
 
-async function invalidateCache(dryRun: boolean) {
+async function invalidateCache(dryRun: boolean): Promise<boolean> {
   if (dryRun) {
     console.log('Phase 3: [dry-run] Would invalidate recommendation cache.');
-    return;
+    return true;
   }
 
   const { error } = await supabase
@@ -147,9 +163,11 @@ async function invalidateCache(dryRun: boolean) {
 
   if (error) {
     console.error(`Cache invalidation failed: ${error.message}`);
-  } else {
-    console.log('Phase 3: Recommendation cache invalidated.');
+    return false;
   }
+
+  console.log('Phase 3: Recommendation cache invalidated.');
+  return true;
 }
 
 // --- Main ---
@@ -158,17 +176,31 @@ async function main() {
   const { dryRun } = parseArgs();
   console.log(`Cleanup — ${dryRun ? 'DRY RUN' : 'LIVE'}\n`);
 
-  const marked = await checkAndMarkBrokenImages(dryRun);
-  const deleted = await deleteUnavailable(dryRun);
+  const phase1 = await checkAndMarkBrokenImages(dryRun);
+  const phase2 = await deleteUnavailable(dryRun);
 
-  if (marked > 0 || deleted > 0) {
-    await invalidateCache(dryRun);
+  let cacheOk = true;
+  if (phase1.count > 0 || phase2.count > 0) {
+    cacheOk = await invalidateCache(dryRun);
   }
 
-  console.log(`\nDone. ${marked} marked unavailable, ${deleted} deleted.`);
+  console.log(`\nDone. ${phase1.count} marked unavailable, ${phase2.count} deleted.`);
+
+  writeGithubOutput({
+    marked: phase1.count,
+    deleted: phase2.count,
+    cache_invalidated: cacheOk ? 'true' : 'false',
+    had_errors: phase1.hadError || phase2.hadError || !cacheOk ? 'true' : 'false',
+  });
+
+  if (phase1.hadError || phase2.hadError || !cacheOk) {
+    console.error('Cleanup finished with errors.');
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {
   console.error('Fatal:', err);
+  writeGithubOutput({ marked: 0, deleted: 0, cache_invalidated: 'false', had_errors: 'true' });
   process.exit(1);
 });

@@ -32,12 +32,18 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - name: Batch embed
+        id: embed_step
         run: |
           if [ "$BRAND" = "all" ]; then
             node --import tsx scripts/batch-embed.ts
           else
             node --import tsx scripts/batch-embed.ts --brand "$BRAND"
           fi
+    outputs:
+      total: ${{ steps.embed_step.outputs.total }}
+      success: ${{ steps.embed_step.outputs.success }}
+      failed: ${{ steps.embed_step.outputs.failed }}
+      cache_invalidated: ${{ steps.embed_step.outputs.cache_invalidated }}
 
   notify:
     name: Telegram Notification
@@ -48,6 +54,10 @@ jobs:
     env:
       BRAND: ${{ inputs.brand }}
       EMBED_STATUS: ${{ needs.embed.result }}
+      EMBED_TOTAL: ${{ needs.embed.outputs.total }}
+      EMBED_SUCCESS: ${{ needs.embed.outputs.success }}
+      EMBED_FAILED: ${{ needs.embed.outputs.failed }}
+      CACHE_INVALIDATED: ${{ needs.embed.outputs.cache_invalidated }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
@@ -66,10 +76,18 @@ jobs:
             LABEL="전체"
           fi
 
+          TOTAL="${EMBED_TOTAL:-?}"
+          SUCCESS="${EMBED_SUCCESS:-?}"
+          FAILED="${EMBED_FAILED:-?}"
+          CACHE="${CACHE_INVALIDATED:-unknown}"
+
           MSG="${EMOJI} *On-Demand Embed ${STATUS}*
 
           *Brand:* ${LABEL}
-          *Status:* ${EMBED_STATUS}"
+          *Requested:* ${TOTAL}
+          *Embedded:* ${SUCCESS}
+          *Failed:* ${FAILED}
+          *Cache invalidated:* ${CACHE}"
 
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \

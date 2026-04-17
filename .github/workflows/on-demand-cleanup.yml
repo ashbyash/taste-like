@@ -21,7 +21,13 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - name: Run cleanup
+        id: cleanup_step
         run: node --import tsx scripts/cleanup.ts
+    outputs:
+      marked: ${{ steps.cleanup_step.outputs.marked }}
+      deleted: ${{ steps.cleanup_step.outputs.deleted }}
+      cache_invalidated: ${{ steps.cleanup_step.outputs.cache_invalidated }}
+      had_errors: ${{ steps.cleanup_step.outputs.had_errors }}
 
   notify:
     name: Telegram Notification
@@ -31,6 +37,10 @@ jobs:
     timeout-minutes: 5
     env:
       CLEANUP_STATUS: ${{ needs.cleanup.result }}
+      MARKED: ${{ needs.cleanup.outputs.marked }}
+      DELETED: ${{ needs.cleanup.outputs.deleted }}
+      CACHE_INVALIDATED: ${{ needs.cleanup.outputs.cache_invalidated }}
+      HAD_ERRORS: ${{ needs.cleanup.outputs.had_errors }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
@@ -44,7 +54,17 @@ jobs:
             STATUS="실패"
           fi
 
-          MSG="${EMOJI} *Cleanup ${STATUS}*"
+          MARKED_VAL="${MARKED:-?}"
+          DELETED_VAL="${DELETED:-?}"
+          CACHE="${CACHE_INVALIDATED:-unknown}"
+          ERRORS="${HAD_ERRORS:-unknown}"
+
+          MSG="${EMOJI} *Cleanup ${STATUS}*
+
+          *Marked unavailable:* ${MARKED_VAL}
+          *Deleted:* ${DELETED_VAL}
+          *Cache invalidated:* ${CACHE}
+          *Errors:* ${ERRORS}"
 
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \

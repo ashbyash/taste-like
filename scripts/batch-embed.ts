@@ -10,6 +10,7 @@
  *   node --env-file=.env.local --import tsx scripts/batch-embed.ts --dry-run
  */
 
+import { appendFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 import { getEmbedding } from '../src/lib/embedding/client';
 
@@ -41,6 +42,13 @@ function parseArgs() {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function writeGithubOutput(pairs: Record<string, string | number>) {
+  const file = process.env.GITHUB_OUTPUT;
+  if (!file) return;
+  const body = Object.entries(pairs).map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
+  appendFileSync(file, body);
 }
 
 async function fetchProducts(brand?: string): Promise<ProductRow[]> {
@@ -115,7 +123,7 @@ async function processProduct(
   return true;
 }
 
-async function invalidateCache() {
+async function invalidateCache(): Promise<boolean> {
   const { error } = await supabase
     .from('recommendation_cache')
     .delete()
@@ -136,10 +144,12 @@ async function main() {
   console.log(`Batch embed — ${dryRun ? 'DRY RUN' : 'LIVE'}${brand ? ` — brand: ${brand}` : ''}`);
 
   const products = await fetchProducts(brand);
-  console.log(`Found ${products.length} products with missing embeddings.`);
+  const total = products.length;
+  console.log(`Found ${total} products with missing embeddings.`);
 
-  if (products.length === 0) {
+  if (total === 0) {
     console.log('Nothing to do.');
+    writeGithubOutput({ total: 0, success: 0, failed: 0, cache_invalidated: 'false' });
     return;
   }
 
@@ -150,7 +160,6 @@ async function main() {
     const batch = products.slice(i, i + BATCH_SIZE);
     console.log(`\nBatch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(products.length / BATCH_SIZE)} (${batch.length} products)`);
 
-    // Process with concurrency limit
     for (let j = 0; j < batch.length; j += CONCURRENCY) {
       const chunk = batch.slice(j, j + CONCURRENCY);
       const results = await Promise.allSettled(
@@ -167,17 +176,37 @@ async function main() {
       }
     }
 
-    console.log(`  Progress: ${Math.min(i + BATCH_SIZE, products.length)}/${products.length} (${success} ok, ${failed} failed)`);
+    console.log(`  Progress: ${Math.min(i + BATCH_SIZE, total)}/${total} (${success} ok, ${failed} failed)`);
   }
 
   console.log(`\nDone. ${success} embedded, ${failed} failed.`);
 
+  let cacheInvalidated = false;
   if (!dryRun && success > 0) {
-    await invalidateCache();
+    cacheInvalidated = await invalidateCache();
+  }
+
+  writeGithubOutput({
+    total,
+    success,
+    failed,
+    cache_invalidated: cacheInvalidated ? 'true' : 'false',
+  });
+
+  // Fail the workflow if embedding was expected but nothing succeeded,
+  // or if cache invalidation failed after successful embeds.
+  if (total > 0 && success === 0) {
+    console.error(`All ${total} embeddings failed.`);
+    process.exit(1);
+  }
+  if (!dryRun && success > 0 && !cacheInvalidated) {
+    console.error('Embeddings succeeded but cache invalidation failed.');
+    process.exit(1);
   }
 }
 
 main().catch((err) => {
   console.error('Fatal:', err);
+  writeGithubOutput({ total: -1, success: 0, failed: 0, cache_invalidated: 'false' });
   process.exit(1);
 });

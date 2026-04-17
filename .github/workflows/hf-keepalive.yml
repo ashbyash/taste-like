@@ -1,0 +1,80 @@
+name: HF Space Keep-Alive
+
+on:
+  schedule:
+    # Daily at 03:00 KST = 18:00 UTC prior day
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+env:
+  HF_SPACE_URL: ${{ secrets.HF_SPACE_URL }}
+  HF_SPACE_API_KEY: ${{ secrets.HF_SPACE_API_KEY }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  HF_SPACE_REPO_ID: ${{ secrets.HF_SPACE_REPO_ID }}
+
+jobs:
+  keepalive:
+    name: Ping + Self-Heal HF Space
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Keep-alive
+        id: keepalive_step
+        run: node --import tsx scripts/hf-keepalive.ts
+    outputs:
+      action: ${{ steps.keepalive_step.outputs.action }}
+      stage: ${{ steps.keepalive_step.outputs.stage }}
+      status: ${{ steps.keepalive_step.outputs.status }}
+      elapsed_ms: ${{ steps.keepalive_step.outputs.elapsed_ms }}
+      note: ${{ steps.keepalive_step.outputs.note }}
+
+  notify:
+    name: Telegram Notification
+    needs: [keepalive]
+    if: always() && (needs.keepalive.result != 'success' || needs.keepalive.outputs.action == 'restarted' || needs.keepalive.outputs.action == 'woken-up')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      JOB_STATUS: ${{ needs.keepalive.result }}
+      ACTION: ${{ needs.keepalive.outputs.action }}
+      STAGE: ${{ needs.keepalive.outputs.stage }}
+      STATUS: ${{ needs.keepalive.outputs.status }}
+      ELAPSED_MS: ${{ needs.keepalive.outputs.elapsed_ms }}
+      NOTE: ${{ needs.keepalive.outputs.note }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Send result to Telegram
+        run: |
+          if [ "$JOB_STATUS" = "success" ]; then
+            EMOJI="✅"
+          else
+            EMOJI="❌"
+          fi
+
+          ACT="${ACTION:-unknown}"
+          STG="${STAGE:-?}"
+          STS="${STATUS:-?}"
+          ELP="${ELAPSED_MS:-?}"
+
+          MSG="${EMOJI} *HF Keep-Alive: ${ACT}*
+
+          *Stage:* ${STG}
+          *Status:* ${STS}
+          *Elapsed:* ${ELP}ms"
+
+          if [ -n "$NOTE" ]; then
+            MSG="${MSG}
+
+          *Note:* ${NOTE}"
+          fi
+
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$MSG" '{chat_id: $chat_id, text: $text, parse_mode: "Markdown"}')"

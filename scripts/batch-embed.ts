@@ -13,6 +13,7 @@
 import { appendFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 import { getEmbedding } from '../src/lib/embedding/client';
+import { ensureSpaceHealthy } from '../src/lib/hf/control';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -147,6 +148,19 @@ async function main() {
   const { dryRun, brand } = parseArgs();
 
   console.log(`Batch embed — ${dryRun ? 'DRY RUN' : 'LIVE'}${brand ? ` — brand: ${brand}` : ''}`);
+
+  if (!dryRun) {
+    console.log('\nPreflight: checking HF Space health...');
+    const health = await ensureSpaceHealthy();
+    console.log(`Preflight: ${health.action}${health.finalStage ? ` (stage=${health.finalStage})` : ''} in ${health.elapsedMs}ms`);
+    if (health.note) console.log(`  note: ${health.note}`);
+
+    if (health.action === 'failed') {
+      console.error('HF Space unhealthy — aborting embed.');
+      writeGithubOutput({ total: -1, success: 0, failed: 0, cache_invalidated: 'false' });
+      process.exit(1);
+    }
+  }
 
   const products = await fetchProducts(brand);
   const total = products.length;

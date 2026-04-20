@@ -6,6 +6,9 @@ import type { Category, Gender } from '@/types/brand';
 // Must use full words (e.g. "크로스백" not "크로스") to avoid false positives like "크로스 오버 팬츠"
 const CROSS_SELL_BAG_RE = /백팩|토트백|쇼퍼\s*백|숄더\s*백|크로스\s*백|버킷\s*백|클러치|미니\s*백|호보\s*백|핸드백|박스백|쇼퍼/i;
 
+// ZARA xmedia can include video manifests (.m3u8) and mp4 clips — skip them and keep only still images.
+const IMAGE_URL_RE = /\.(jpg|jpeg|png|webp|gif|avif)(\?|$)/i;
+
 // ZARA category pages — SEO URLs discovered from site navigation
 const WOMEN_URLS: [Category, string][] = [
   ['outerwear', 'https://www.zara.com/kr/ko/woman-jackets-l1114.html'],
@@ -147,7 +150,9 @@ export class ZaraCrawler extends BaseCrawler {
     for (const color of colors) {
       for (const media of color.xmedia ?? []) {
         const url = media.extraInfo?.deliveryUrl;
-        if (url) return url.startsWith('http') ? url : `https://static.zara.net${url}`;
+        if (!url) continue;
+        if (!IMAGE_URL_RE.test(url)) continue;
+        return url.startsWith('http') ? url : `https://static.zara.net${url}`;
       }
     }
     return null;

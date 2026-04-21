@@ -22,6 +22,10 @@ jobs:
     env:
       MIUMIU_ALGOLIA_APP_ID: ${{ secrets.MIUMIU_ALGOLIA_APP_ID }}
       MIUMIU_ALGOLIA_API_KEY: ${{ secrets.MIUMIU_ALGOLIA_API_KEY }}
+    outputs:
+      ok_count: ${{ steps.crawl.outputs.ok_count }}
+      total: ${{ steps.crawl.outputs.total }}
+      failed_brands: ${{ steps.crawl.outputs.failed_brands }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -30,30 +34,44 @@ jobs:
           cache: 'npm'
       - run: npm ci
 
-      - name: Crawl Miu Miu
-        id: miumiu
-        continue-on-error: true
-        run: node --conditions=react-server --import tsx scripts/crawl.ts miu-miu
-
-      - name: Crawl Lemaire
-        id: lemaire
-        continue-on-error: true
-        run: node --conditions=react-server --import tsx scripts/crawl.ts lemaire --both-genders
-
-      - name: Crawl Massimo Dutti
-        id: massimo
-        continue-on-error: true
-        run: node --conditions=react-server --import tsx scripts/crawl.ts massimo-dutti --both-genders
-
-      - name: Crawl The Row
-        id: therow
-        continue-on-error: true
-        run: node --conditions=react-server --import tsx scripts/crawl.ts the-row --both-genders
+      - name: Crawl API brands
+        id: crawl
+        run: |
+          FAILED=""
+          OK=0
+          TRIED=0
+          for cmd in \
+            "node --conditions=react-server --import tsx scripts/crawl.ts miu-miu|miu-miu" \
+            "node --conditions=react-server --import tsx scripts/crawl.ts lemaire --both-genders|lemaire" \
+            "node --conditions=react-server --import tsx scripts/crawl.ts massimo-dutti --both-genders|massimo-dutti" \
+            "node --conditions=react-server --import tsx scripts/crawl.ts the-row --both-genders|the-row"; do
+            CMD="${cmd%|*}"; NAME="${cmd##*|}"; TRIED=$((TRIED+1))
+            echo "::group::Crawl $NAME"
+            if eval "$CMD"; then OK=$((OK+1)); else FAILED="$FAILED $NAME"; fi
+            echo "::endgroup::"
+          done
+          FAILED="${FAILED# }"
+          {
+            echo "ok_count=$OK"
+            echo "total=$TRIED"
+            echo "failed_brands=$FAILED"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$FAILED" ]; then
+            echo "::warning::Failed brands: $FAILED"
+          fi
+          if [ "$OK" -eq 0 ] && [ "$TRIED" -gt 0 ]; then
+            echo "::error::All API crawlers failed ($TRIED tried)"
+            exit 1
+          fi
 
   playwright-crawlers:
     name: Playwright Crawlers (ZARA, COS, ARKET, UNIQLO)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      ok_count: ${{ steps.crawl.outputs.ok_count }}
+      total: ${{ steps.crawl.outputs.total }}
+      failed_brands: ${{ steps.crawl.outputs.failed_brands }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -64,25 +82,35 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
 
-      - name: Crawl ZARA
-        id: zara
-        continue-on-error: true
-        run: xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts zara --both-genders
-
-      - name: Crawl COS
-        id: cos
-        continue-on-error: true
-        run: xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts cos --both-genders
-
-      - name: Crawl ARKET
-        id: arket
-        continue-on-error: true
-        run: xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts arket --both-genders
-
-      - name: Crawl UNIQLO
-        id: uniqlo
-        continue-on-error: true
-        run: xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts uniqlo --both-genders
+      - name: Crawl Playwright brands
+        id: crawl
+        run: |
+          FAILED=""
+          OK=0
+          TRIED=0
+          for cmd in \
+            "xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts zara --both-genders|zara" \
+            "xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts cos --both-genders|cos" \
+            "xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts arket --both-genders|arket" \
+            "xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts uniqlo --both-genders|uniqlo"; do
+            CMD="${cmd%|*}"; NAME="${cmd##*|}"; TRIED=$((TRIED+1))
+            echo "::group::Crawl $NAME"
+            if eval "$CMD"; then OK=$((OK+1)); else FAILED="$FAILED $NAME"; fi
+            echo "::endgroup::"
+          done
+          FAILED="${FAILED# }"
+          {
+            echo "ok_count=$OK"
+            echo "total=$TRIED"
+            echo "failed_brands=$FAILED"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$FAILED" ]; then
+            echo "::warning::Failed brands: $FAILED"
+          fi
+          if [ "$OK" -eq 0 ] && [ "$TRIED" -gt 0 ]; then
+            echo "::error::All Playwright crawlers failed ($TRIED tried)"
+            exit 1
+          fi
 
   ysl-crawler:
     name: YSL Crawler (Saint Laurent)
@@ -97,7 +125,6 @@ jobs:
       - run: npm ci
 
       - name: Crawl Saint Laurent
-        continue-on-error: true
         run: node --conditions=react-server --import tsx scripts/crawl.ts saint-laurent --both-genders
 
   batch-describe:
@@ -161,7 +188,13 @@ jobs:
     timeout-minutes: 5
     env:
       API_RESULT: ${{ needs.api-crawlers.result }}
+      API_OK: ${{ needs.api-crawlers.outputs.ok_count }}
+      API_TOTAL: ${{ needs.api-crawlers.outputs.total }}
+      API_FAILED: ${{ needs.api-crawlers.outputs.failed_brands }}
       PLAYWRIGHT_RESULT: ${{ needs.playwright-crawlers.result }}
+      PW_OK: ${{ needs.playwright-crawlers.outputs.ok_count }}
+      PW_TOTAL: ${{ needs.playwright-crawlers.outputs.total }}
+      PW_FAILED: ${{ needs.playwright-crawlers.outputs.failed_brands }}
       YSL_RESULT: ${{ needs.ysl-crawler.result }}
       DESCRIBE_RESULT: ${{ needs.batch-describe.result }}
       DESCRIBE_TOTAL: ${{ needs.batch-describe.outputs.total }}
@@ -209,10 +242,15 @@ jobs:
           EMB_F="${EMBED_FAILED:-?}"
           CACHE="${CACHE_INVALIDATED:-unknown}"
 
+          API_LINE="${API_ICON} API crawlers: ${API_OK:-?}/${API_TOTAL:-?} ok"
+          [ -n "$API_FAILED" ] && API_LINE="$API_LINE (failed:$API_FAILED)"
+          PW_LINE="${PW_ICON} Playwright crawlers: ${PW_OK:-?}/${PW_TOTAL:-?} ok"
+          [ -n "$PW_FAILED" ] && PW_LINE="$PW_LINE (failed:$PW_FAILED)"
+
           MSG="${HEADER}
 
-          ${API_ICON} API crawlers (miumiu/lemaire/massimo/therow)
-          ${PW_ICON} Playwright crawlers (zara/cos/arket/uniqlo)
+          ${API_LINE}
+          ${PW_LINE}
           ${YSL_ICON} YSL crawler
 
           ${DESC_ICON} Describe: ${DESC_T} requested, ${DESC_S} ok, ${DESC_F} failed

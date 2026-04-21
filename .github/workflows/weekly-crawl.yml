@@ -33,22 +33,22 @@ jobs:
       - name: Crawl Miu Miu
         id: miumiu
         continue-on-error: true
-        run: node --import tsx scripts/crawl.ts miu-miu
+        run: node --conditions=react-server --import tsx scripts/crawl.ts miu-miu
 
       - name: Crawl Lemaire
         id: lemaire
         continue-on-error: true
-        run: node --import tsx scripts/crawl.ts lemaire --both-genders
+        run: node --conditions=react-server --import tsx scripts/crawl.ts lemaire --both-genders
 
       - name: Crawl Massimo Dutti
         id: massimo
         continue-on-error: true
-        run: node --import tsx scripts/crawl.ts massimo-dutti --both-genders
+        run: node --conditions=react-server --import tsx scripts/crawl.ts massimo-dutti --both-genders
 
       - name: Crawl The Row
         id: therow
         continue-on-error: true
-        run: node --import tsx scripts/crawl.ts the-row --both-genders
+        run: node --conditions=react-server --import tsx scripts/crawl.ts the-row --both-genders
 
   playwright-crawlers:
     name: Playwright Crawlers (ZARA, COS, ARKET, UNIQLO)
@@ -67,22 +67,22 @@ jobs:
       - name: Crawl ZARA
         id: zara
         continue-on-error: true
-        run: xvfb-run node --import tsx scripts/crawl.ts zara --both-genders
+        run: xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts zara --both-genders
 
       - name: Crawl COS
         id: cos
         continue-on-error: true
-        run: xvfb-run node --import tsx scripts/crawl.ts cos --both-genders
+        run: xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts cos --both-genders
 
       - name: Crawl ARKET
         id: arket
         continue-on-error: true
-        run: xvfb-run node --import tsx scripts/crawl.ts arket --both-genders
+        run: xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts arket --both-genders
 
       - name: Crawl UNIQLO
         id: uniqlo
         continue-on-error: true
-        run: xvfb-run node --import tsx scripts/crawl.ts uniqlo --both-genders
+        run: xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts uniqlo --both-genders
 
   ysl-crawler:
     name: YSL Crawler (Saint Laurent)
@@ -98,7 +98,7 @@ jobs:
 
       - name: Crawl Saint Laurent
         continue-on-error: true
-        run: node --import tsx scripts/crawl.ts saint-laurent --both-genders
+        run: node --conditions=react-server --import tsx scripts/crawl.ts saint-laurent --both-genders
 
   batch-describe:
     name: Generate Fashion Descriptions

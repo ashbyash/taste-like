@@ -9,9 +9,9 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "crawl": "node --env-file=.env.local --import tsx scripts/crawl.ts",
-    "crawl:ysl": "node --env-file=.env.local --import tsx scripts/crawl-ysl.ts",
-    "seed:brands": "node --env-file=.env.local --import tsx scripts/seed-brands.ts"
+    "crawl": "node --conditions=react-server --env-file=.env.local --import tsx scripts/crawl.ts",
+    "crawl:ysl": "node --conditions=react-server --env-file=.env.local --import tsx scripts/crawl-ysl.ts",
+    "seed:brands": "node --conditions=react-server --env-file=.env.local --import tsx scripts/seed-brands.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.97.0",

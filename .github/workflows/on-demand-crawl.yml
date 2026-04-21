@@ -48,12 +48,12 @@ jobs:
       # API-based crawlers (single brand — no continue-on-error)
       - name: Crawl (API)
         if: contains('miu-miu lemaire massimo-dutti the-row saint-laurent', inputs.brand)
-        run: node --import tsx scripts/crawl.ts "$BRAND" --both-genders
+        run: node --conditions=react-server --import tsx scripts/crawl.ts "$BRAND" --both-genders
 
       # Playwright-based crawlers (single brand — no continue-on-error)
       - name: Crawl (Playwright)
         if: contains('zara cos arket uniqlo', inputs.brand)
-        run: xvfb-run node --import tsx scripts/crawl.ts "$BRAND" --both-genders
+        run: xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts "$BRAND" --both-genders
 
       # All brands — individual failures don't block others
       - name: Crawl all API brands
@@ -61,13 +61,24 @@ jobs:
         if: inputs.brand == 'all'
         run: |
           FAILED=""
-          node --import tsx scripts/crawl.ts miu-miu || FAILED="$FAILED miu-miu"
-          node --import tsx scripts/crawl.ts lemaire --both-genders || FAILED="$FAILED lemaire"
-          node --import tsx scripts/crawl.ts massimo-dutti --both-genders || FAILED="$FAILED massimo-dutti"
-          node --import tsx scripts/crawl.ts saint-laurent --both-genders || FAILED="$FAILED saint-laurent"
-          node --import tsx scripts/crawl.ts the-row --both-genders || FAILED="$FAILED the-row"
+          FAILED=""
+          OK=0
+          TRIED=0
+          for cmd in \
+            "node --conditions=react-server --import tsx scripts/crawl.ts miu-miu|miu-miu" \
+            "node --conditions=react-server --import tsx scripts/crawl.ts lemaire --both-genders|lemaire" \
+            "node --conditions=react-server --import tsx scripts/crawl.ts massimo-dutti --both-genders|massimo-dutti" \
+            "node --conditions=react-server --import tsx scripts/crawl.ts saint-laurent --both-genders|saint-laurent" \
+            "node --conditions=react-server --import tsx scripts/crawl.ts the-row --both-genders|the-row"; do
+            CMD="${cmd%|*}"; NAME="${cmd##*|}"; TRIED=$((TRIED+1))
+            if eval "$CMD"; then OK=$((OK+1)); else FAILED="$FAILED $NAME"; fi
+          done
           if [ -n "$FAILED" ]; then
             echo "::warning::Failed brands:$FAILED"
+          fi
+          if [ "$OK" -eq 0 ] && [ "$TRIED" -gt 0 ]; then
+            echo "::error::All API crawlers failed ($TRIED tried)"
+            exit 1
           fi
 
       - name: Crawl all Playwright brands
@@ -75,12 +86,23 @@ jobs:
         if: inputs.brand == 'all'
         run: |
           FAILED=""
-          xvfb-run node --import tsx scripts/crawl.ts zara --both-genders || FAILED="$FAILED zara"
-          xvfb-run node --import tsx scripts/crawl.ts cos --both-genders || FAILED="$FAILED cos"
-          xvfb-run node --import tsx scripts/crawl.ts arket --both-genders || FAILED="$FAILED arket"
-          xvfb-run node --import tsx scripts/crawl.ts uniqlo --both-genders || FAILED="$FAILED uniqlo"
+          FAILED=""
+          OK=0
+          TRIED=0
+          for cmd in \
+            "xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts zara --both-genders|zara" \
+            "xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts cos --both-genders|cos" \
+            "xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts arket --both-genders|arket" \
+            "xvfb-run node --conditions=react-server --import tsx scripts/crawl.ts uniqlo --both-genders|uniqlo"; do
+            CMD="${cmd%|*}"; NAME="${cmd##*|}"; TRIED=$((TRIED+1))
+            if eval "$CMD"; then OK=$((OK+1)); else FAILED="$FAILED $NAME"; fi
+          done
           if [ -n "$FAILED" ]; then
             echo "::warning::Failed brands:$FAILED"
+          fi
+          if [ "$OK" -eq 0 ] && [ "$TRIED" -gt 0 ]; then
+            echo "::error::All Playwright crawlers failed ($TRIED tried)"
+            exit 1
           fi
 
   batch-describe:
